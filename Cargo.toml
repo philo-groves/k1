@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cargo_metadata = "0.18.1"
 ovmf-prebuilt = "0.2.7"
+serde_json = "1.0.149"

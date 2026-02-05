@@ -1,8 +1,9 @@
+use cargo_metadata::MetadataCommand;
 use ovmf_prebuilt::{Arch as OvmfArch, FileType, Prebuilt, Source};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy)]
@@ -12,19 +13,20 @@ pub enum Arch {
 }
 
 pub fn build(binary: String) -> Result<(), String> {
-    let build_dir = Path::new(".build");
+    let workspace_root = workspace_root_from_binary(&binary)?;
+    let build_dir = workspace_root.join(".build");
     if build_dir.exists() {
-        fs::remove_dir_all(build_dir).map_err(|err| format!("failed to remove .build: {err}"))?;
+        fs::remove_dir_all(&build_dir).map_err(|err| format!("failed to remove .build: {err}"))?;
     }
 
-    fs::create_dir_all(build_dir).map_err(|err| format!("failed to create .build: {err}"))?;
+    fs::create_dir_all(&build_dir).map_err(|err| format!("failed to create .build: {err}"))?;
 
     let kernel_dest = build_dir.join("kernel");
     fs::copy(&binary, &kernel_dest)
         .map_err(|err| format!("failed to copy kernel binary: {err}"))?;
 
     let arch = detect_arch(&binary)?;
-    persist_ovmf_files(build_dir, arch)?;
+    persist_ovmf_files(&build_dir, arch)?;
 
     let limine_dir = build_dir.join("limine");
     let mut clone_cmd = command("git");
@@ -153,6 +155,22 @@ pub fn image_name_from_binary(binary: &str) -> String {
         .unwrap_or_else(|| OsStr::new("kernel"))
         .to_string_lossy()
         .into_owned()
+}
+
+pub fn workspace_root_from_binary(binary: &str) -> Result<PathBuf, String> {
+    let kernel_root = kernel_root_from_binary(binary)?;
+    let manifest_path = kernel_root.join("Cargo.toml");
+    if !manifest_path.exists() {
+        return Ok(kernel_root);
+    }
+
+    let metadata = MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .no_deps()
+        .exec()
+        .map_err(|err| format!("failed to run cargo metadata: {err}"))?;
+
+    Ok(metadata.workspace_root.into_std_path_buf())
 }
 
 impl Arch {
