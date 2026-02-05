@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy)]
-enum Arch {
+pub enum Arch {
     X86_64,
     Aarch64,
 }
@@ -48,6 +48,12 @@ pub fn build(binary: String) -> Result<(), String> {
     fs::create_dir_all(&iso_limine)
         .map_err(|err| format!("failed to create limine boot dir: {err}"))?;
     fs::create_dir_all(&iso_efi).map_err(|err| format!("failed to create EFI boot dir: {err}"))?;
+
+    let iso_kernel = iso_root.join("boot").join("kernel");
+    fs::copy(&kernel_dest, &iso_kernel)
+        .map_err(|err| format!("failed to copy kernel into ISO: {err}"))?;
+
+    copy_limine_conf(&binary, &iso_limine)?;
 
     match arch {
         Arch::X86_64 => {
@@ -119,7 +125,7 @@ pub fn build(binary: String) -> Result<(), String> {
     Ok(())
 }
 
-fn detect_arch(binary: &str) -> Result<Arch, String> {
+pub fn detect_arch(binary: &str) -> Result<Arch, String> {
     if let Ok(value) = env::var("CARGO_CFG_TARGET_ARCH") {
         return parse_arch(&value).ok_or_else(|| format!("unsupported target arch: {value}"));
     }
@@ -141,12 +147,21 @@ fn parse_arch(value: &str) -> Option<Arch> {
     }
 }
 
-fn image_name_from_binary(binary: &str) -> String {
+pub fn image_name_from_binary(binary: &str) -> String {
     Path::new(binary)
         .file_stem()
         .unwrap_or_else(|| OsStr::new("kernel"))
         .to_string_lossy()
         .into_owned()
+}
+
+impl Arch {
+    pub fn karch(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "x86_64",
+            Arch::Aarch64 => "aarch64",
+        }
+    }
 }
 
 fn persist_ovmf_files(build_dir: &Path, arch: Arch) -> Result<(), String> {
@@ -173,6 +188,27 @@ fn persist_ovmf_files(build_dir: &Path, arch: Arch) -> Result<(), String> {
         .map_err(|err| format!("failed to copy {}: {err}", vars_src.display()))?;
 
     Ok(())
+}
+
+fn copy_limine_conf(binary: &str, iso_limine: &Path) -> Result<(), String> {
+    let kernel_root = kernel_root_from_binary(binary)?;
+    let source = kernel_root.join("limine.conf");
+    let dest = iso_limine.join("limine.conf");
+    fs::copy(&source, &dest)
+        .map_err(|err| format!("failed to copy {}: {err}", source.display()))?;
+    Ok(())
+}
+
+fn kernel_root_from_binary(binary: &str) -> Result<std::path::PathBuf, String> {
+    let binary_path = Path::new(binary);
+    for ancestor in binary_path.ancestors() {
+        if ancestor.file_name() == Some(OsStr::new("target")) {
+            if let Some(parent) = ancestor.parent() {
+                return Ok(parent.to_path_buf());
+            }
+        }
+    }
+    Err("unable to determine kernel root from binary path".to_string())
 }
 
 fn copy_into(source_dir: &Path, dest_dir: &Path, names: &[&str]) -> Result<(), String> {
