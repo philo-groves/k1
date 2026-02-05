@@ -1,4 +1,6 @@
 mod args;
+mod builder;
+mod runner;
 
 fn main() {
     match args::parse() {
@@ -8,9 +10,9 @@ fn main() {
             binary,
             binary_args,
         }) => {
-            println!("runner target: {binary}");
-            if !binary_args.is_empty() {
-                println!("runner args: {binary_args:?}");
+            if let Err(message) = runner::run(binary, binary_args) {
+                eprintln!("error: {message}");
+                std::process::exit(1);
             }
         }
         Err(message) => {
