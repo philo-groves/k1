@@ -2,6 +2,10 @@
 name = "k1"
 version = "0.1.0"
 edition = "2024"
+authors = ["Philo Groves <philogroves@gmail.com>"]
+description = "A cargo runner for Rust-based operating system kernels."
+license = "MIT"
+repository = "https://github.com/philogroves/k1"
 
 [dependencies]
 cargo_metadata = "0.18.1"
