@@ -11,3 +11,6 @@ repository = "https://github.com/philogroves/k1"
 cargo_metadata = "0.18.1"
 ovmf-prebuilt = "0.2.7"
 serde_json = "1.0.149"
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }

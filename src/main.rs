@@ -1,6 +1,7 @@
 mod args;
 mod builder;
 mod cleaner;
+mod logging;
 mod runner;
 
 fn main() {

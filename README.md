@@ -115,7 +115,8 @@ Prints final ISO path on success.
 ## Key Directories and Artifacts
 
 - `.k1/build/`: transient build staging, ISO root, firmware copies, final ISO.
-- `.k1/cache/limine/`: cached Limine checkout/build output.
+- `.k1/cache/`: cached third-party build assets (including `limine/` and `ovmf/`).
+- `.k1/logs/`: persisted `k1` run/test logs.
 - `.k1/testing/`: raw and normalized JSONL test output files.
 
 ## External Tools and Dependencies
@@ -137,5 +138,6 @@ Rust dependencies:
 
 1. Cargo (or user) invokes `k1 <path-to-kernel-binary>`.
 2. `k1` builds a bootable ISO under `.k1/build`.
-3. `k1` starts QEMU with firmware + ISO.
-4. In test mode, `k1` captures and normalizes JSON test output into `.k1/testing/testing-<group>.jsonl`.
+3. `k1` writes run/test logs to `.k1/logs/k1-<mode>-<timestamp>.log`.
+4. `k1` starts QEMU with firmware + ISO.
+5. In test mode, `k1` captures and normalizes JSON test output into `.k1/testing/testing-<group>.jsonl`.

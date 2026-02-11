@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Arch {
@@ -13,6 +14,7 @@ pub enum Arch {
 }
 
 pub fn build(binary: String) -> Result<(), String> {
+    info!(binary = %binary, "building kernel image");
     let workspace_root = workspace_root_from_binary(&binary)?;
     let k1_dir = workspace_root.join(".k1");
     let build_dir = k1_dir.join("build");
@@ -28,9 +30,11 @@ pub fn build(binary: String) -> Result<(), String> {
     let kernel_dest = build_dir.join("kernel");
     fs::copy(&binary, &kernel_dest)
         .map_err(|err| format!("failed to copy kernel binary: {err}"))?;
+    debug!(source = %binary, dest = %kernel_dest.display(), "copied kernel binary");
 
     let arch = detect_arch(&binary)?;
-    persist_ovmf_files(&build_dir, arch)?;
+    info!(arch = %arch.karch(), "detected architecture");
+    persist_ovmf_files(&cache_dir, &build_dir, arch)?;
 
     let limine_dir = cache_dir.join("limine");
     if !limine_dir.exists() {
@@ -129,7 +133,7 @@ pub fn build(binary: String) -> Result<(), String> {
         }
     }
 
-    println!("iso: {}", iso_path.display());
+    info!(iso = %iso_path.display(), "built ISO image");
     Ok(())
 }
 
@@ -188,28 +192,64 @@ impl Arch {
     }
 }
 
-fn persist_ovmf_files(build_dir: &Path, arch: Arch) -> Result<(), String> {
-    let ovmf_dir = build_dir.join("ovmf");
-    fs::create_dir_all(&ovmf_dir).map_err(|err| format!("failed to create ovmf dir: {err}"))?;
+fn persist_ovmf_files(cache_dir: &Path, build_dir: &Path, arch: Arch) -> Result<(), String> {
+    let cache_ovmf_dir = cache_dir.join("ovmf");
+    fs::create_dir_all(&cache_ovmf_dir)
+        .map_err(|err| format!("failed to create ovmf cache dir: {err}"))?;
 
-    let prebuilt = Prebuilt::fetch(Source::LATEST, &ovmf_dir)
-        .map_err(|err| format!("failed to fetch ovmf prebuilts: {err}"))?;
+    let build_ovmf_dir = build_dir.join("ovmf");
+    fs::create_dir_all(&build_ovmf_dir)
+        .map_err(|err| format!("failed to create ovmf build dir: {err}"))?;
 
     let (ovmf_arch, karch) = match arch {
         Arch::X86_64 => (OvmfArch::X64, "x86_64"),
         Arch::Aarch64 => (OvmfArch::Aarch64, "aarch64"),
     };
 
-    let code_src = prebuilt.get_file(ovmf_arch, FileType::Code);
-    let vars_src = prebuilt.get_file(ovmf_arch, FileType::Vars);
+    let cached_code = cache_ovmf_dir.join(format!("ovmf-code-{karch}.fd"));
+    let cached_vars = cache_ovmf_dir.join(format!("ovmf-vars-{karch}.fd"));
 
-    let code_dest = ovmf_dir.join(format!("ovmf-code-{karch}.fd"));
-    let vars_dest = ovmf_dir.join(format!("ovmf-vars-{karch}.fd"));
+    if !cached_code.exists() || !cached_vars.exists() {
+        info!(
+            arch = karch,
+            cache_dir = %cache_ovmf_dir.display(),
+            "cached OVMF files missing, fetching prebuilts"
+        );
 
-    fs::copy(&code_src, &code_dest)
-        .map_err(|err| format!("failed to copy {}: {err}", code_src.display()))?;
-    fs::copy(&vars_src, &vars_dest)
-        .map_err(|err| format!("failed to copy {}: {err}", vars_src.display()))?;
+        let prebuilt = Prebuilt::fetch(Source::LATEST, &cache_ovmf_dir)
+            .map_err(|err| format!("failed to fetch ovmf prebuilts: {err}"))?;
+        let code_src = prebuilt.get_file(ovmf_arch, FileType::Code);
+        let vars_src = prebuilt.get_file(ovmf_arch, FileType::Vars);
+
+        fs::copy(&code_src, &cached_code)
+            .map_err(|err| format!("failed to copy {}: {err}", code_src.display()))?;
+        fs::copy(&vars_src, &cached_vars)
+            .map_err(|err| format!("failed to copy {}: {err}", vars_src.display()))?;
+    } else {
+        info!(
+            arch = karch,
+            code = %cached_code.display(),
+            vars = %cached_vars.display(),
+            "using cached OVMF files"
+        );
+    }
+
+    let build_code = build_ovmf_dir.join(format!("ovmf-code-{karch}.fd"));
+    let build_vars = build_ovmf_dir.join(format!("ovmf-vars-{karch}.fd"));
+
+    fs::copy(&cached_code, &build_code)
+        .map_err(|err| format!("failed to copy {}: {err}", cached_code.display()))?;
+    fs::copy(&cached_vars, &build_vars)
+        .map_err(|err| format!("failed to copy {}: {err}", cached_vars.display()))?;
+
+    info!(
+        arch = karch,
+        code = %build_code.display(),
+        vars = %build_vars.display(),
+        cache_code = %cached_code.display(),
+        cache_vars = %cached_vars.display(),
+        "persisted OVMF files"
+    );
 
     Ok(())
 }
@@ -226,10 +266,10 @@ fn copy_limine_conf(binary: &str, iso_limine: &Path) -> Result<(), String> {
 fn kernel_root_from_binary(binary: &str) -> Result<std::path::PathBuf, String> {
     let binary_path = Path::new(binary);
     for ancestor in binary_path.ancestors() {
-        if ancestor.file_name() == Some(OsStr::new("target")) {
-            if let Some(parent) = ancestor.parent() {
-                return Ok(parent.to_path_buf());
-            }
+        if ancestor.file_name() == Some(OsStr::new("target"))
+            && let Some(parent) = ancestor.parent()
+        {
+            return Ok(parent.to_path_buf());
         }
     }
     Err("unable to determine kernel root from binary path".to_string())
@@ -246,9 +286,11 @@ fn copy_into(source_dir: &Path, dest_dir: &Path, names: &[&str]) -> Result<(), S
 }
 
 fn run_command(command: &mut Command, context: &str) -> Result<(), String> {
+    debug!(command = ?command, context = context, "executing command");
     let status = command
         .status()
         .map_err(|err| format!("{context}: {err}"))?;
+    debug!(context = context, ?status, "command completed");
     if status.success() {
         Ok(())
     } else {
