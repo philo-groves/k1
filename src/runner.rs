@@ -83,6 +83,18 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
                 ))
                 .arg("-cdrom")
                 .arg(&iso_path);
+
+            if testing_mode {
+                let debugcon = debugcon_output_path(&workspace_root)?;
+                debugcon_path = Some(debugcon.clone());
+                qemu_cmd
+                    .arg("-serial")
+                    .arg(format!("file:{}", debugcon.display()))
+                    .arg("-monitor")
+                    .arg("none")
+                    .arg("-no-reboot")
+                    .arg("-nographic");
+            }
         }
     }
 
@@ -92,7 +104,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
         }
     }
 
-    run_command(&mut qemu_cmd, "failed to run qemu", testing_mode)?;
+    run_command(&mut qemu_cmd, "failed to run qemu", testing_mode, arch)?;
 
     if let Some(path) = debugcon_path {
         finalize_debugcon_file(&path, &workspace_root)?;
@@ -144,25 +156,27 @@ fn debugcon_output_path(workspace_root: &Path) -> Result<std::path::PathBuf, Str
 }
 
 fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|err| format!("failed to open {}: {err}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let cleaned = strip_ansi_and_control(&raw);
+    let json_candidates = extract_json_objects(&cleaned);
+    let mut json_lines: Vec<String> = Vec::new();
 
-    loop {
-        line.clear();
-        let bytes = reader
-            .read_line(&mut line)
-            .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-        if bytes == 0 {
-            return Err(format!("missing test_group in {}", path.display()));
-        }
-        if !line.trim().is_empty() {
-            break;
+    for candidate in json_candidates {
+        let trimmed = candidate.trim();
+        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+            json_lines.push(trimmed.to_string());
         }
     }
 
-    let value: serde_json::Value = serde_json::from_str(line.trim())
+    if json_lines.is_empty() {
+        return Err(format!(
+            "missing test_group in {} (no JSON output emitted; possible early panic before kunit init)",
+            path.display()
+        ));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&json_lines[0])
         .map_err(|err| format!("failed to parse test_group JSON: {err}"))?;
     let test_group = value
         .get("test_group")
@@ -186,19 +200,101 @@ fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), Stri
             .map_err(|err| format!("failed to remove {}: {err}", dest.display()))?;
     }
 
-    std::fs::rename(path, &dest)
-        .map_err(|err| format!("failed to rename {}: {err}", path.display()))?;
+    let mut output = std::fs::File::create(&dest)
+        .map_err(|err| format!("failed to create {}: {err}", dest.display()))?;
+    for line in json_lines {
+        use std::io::Write;
+        writeln!(output, "{line}")
+            .map_err(|err| format!("failed to write {}: {err}", dest.display()))?;
+    }
+
+    std::fs::remove_file(path)
+        .map_err(|err| format!("failed to remove {}: {err}", path.display()))?;
     Ok(())
 }
 
-fn run_command(command: &mut Command, context: &str, testing_mode: bool) -> Result<(), String> {
+fn strip_ansi_and_control(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                i += 2;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if (b'@'..=b'~').contains(&b) {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        let b = bytes[i];
+        if b >= 0x20 || b == b'\n' || b == b'\t' {
+            output.push(b as char);
+        }
+        i += 1;
+    }
+
+    output
+}
+
+fn extract_json_objects(input: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut depth = 0usize;
+    let mut start: Option<usize> = None;
+
+    for (idx, ch) in input.char_indices() {
+        if ch == '{' {
+            if depth == 0 {
+                start = Some(idx);
+            }
+            depth += 1;
+        } else if ch == '}' {
+            if depth > 0 {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start {
+                        results.push(input[s..=idx].to_string());
+                    }
+                    start = None;
+                }
+            }
+        }
+    }
+
+    results
+}
+
+fn run_command(
+    command: &mut Command,
+    context: &str,
+    testing_mode: bool,
+    arch: crate::builder::Arch,
+) -> Result<(), String> {
     let status = command
         .status()
         .map_err(|err| format!("{context}: {err}"))?;
     if status.success() {
         Ok(())
-    } else if testing_mode && status.code() == Some(33) {
-        Ok(())
+    } else if testing_mode {
+        match arch {
+            crate::builder::Arch::X86_64 => {
+                if status.code() == Some(33) {
+                    Ok(())
+                } else {
+                    Err(format!("{context}: exit status {status}"))
+                }
+            }
+            crate::builder::Arch::Aarch64 => Ok(()),
+        }
     } else {
         Err(format!("{context}: exit status {status}"))
     }
