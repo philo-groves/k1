@@ -1,11 +1,18 @@
 mod args;
 mod builder;
+mod cleaner;
 mod runner;
 
 fn main() {
     match args::parse() {
         Ok(args::Args::Help) => print_help(),
         Ok(args::Args::Version) => print_version(),
+        Ok(args::Args::Clean) => {
+            if let Err(message) = cleaner::clean() {
+                eprintln!("error: {message}");
+                std::process::exit(1);
+            }
+        }
         Ok(args::Args::Run {
             binary,
             binary_args,
@@ -25,7 +32,7 @@ fn main() {
 
 fn print_help() {
     println!(
-        "k1 - Cargo target runner\n\nUsage:\n  k1 <path-to-binary> [args...]\n  k1 --help\n  k1 --version"
+        "k1 - Cargo target runner\n\nUsage:\n  k1 <path-to-binary> [args...]\n  k1 clean\n  k1 --help\n  k1 --version"
     );
 }
 

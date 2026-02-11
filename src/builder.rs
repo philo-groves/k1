@@ -14,12 +14,13 @@ pub enum Arch {
 
 pub fn build(binary: String) -> Result<(), String> {
     let workspace_root = workspace_root_from_binary(&binary)?;
-    let build_dir = workspace_root.join(".build");
+    let build_dir = workspace_root.join(".k1").join("build");
     if build_dir.exists() {
-        fs::remove_dir_all(&build_dir).map_err(|err| format!("failed to remove .build: {err}"))?;
+        fs::remove_dir_all(&build_dir)
+            .map_err(|err| format!("failed to remove .k1/build: {err}"))?;
     }
 
-    fs::create_dir_all(&build_dir).map_err(|err| format!("failed to create .build: {err}"))?;
+    fs::create_dir_all(&build_dir).map_err(|err| format!("failed to create .k1/build: {err}"))?;
 
     let kernel_dest = build_dir.join("kernel");
     fs::copy(&binary, &kernel_dest)

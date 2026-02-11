@@ -11,7 +11,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
     let workspace_root = crate::builder::workspace_root_from_binary(&binary)?;
     let image_name = crate::builder::image_name_from_binary(&binary);
     let karch = arch.karch();
-    let build_dir = workspace_root.join(".build");
+    let build_dir = workspace_root.join(".k1").join("build");
     let iso_path = build_dir.join(format!("{image_name}.iso"));
     let ovmf_code = build_dir.join("ovmf").join(format!("ovmf-code-{karch}.fd"));
     let ovmf_vars = build_dir.join("ovmf").join(format!("ovmf-vars-{karch}.fd"));
@@ -143,7 +143,7 @@ fn is_testing_mode(binary: &str, binary_args: &[String]) -> bool {
 }
 
 fn debugcon_output_path(workspace_root: &Path) -> Result<std::path::PathBuf, String> {
-    let dir = workspace_root.join(".testing");
+    let dir = workspace_root.join(".k1").join("testing");
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
 
@@ -191,7 +191,7 @@ fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), Stri
             }
         })
         .collect();
-    let dir = workspace_root.join(".testing");
+    let dir = workspace_root.join(".k1").join("testing");
     let dest = dir.join(format!("testing-{safe_group}.jsonl"));
 
     if dest.exists() {
