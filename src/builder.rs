@@ -14,13 +14,16 @@ pub enum Arch {
 
 pub fn build(binary: String) -> Result<(), String> {
     let workspace_root = workspace_root_from_binary(&binary)?;
-    let build_dir = workspace_root.join(".k1").join("build");
+    let k1_dir = workspace_root.join(".k1");
+    let build_dir = k1_dir.join("build");
+    let cache_dir = k1_dir.join("cache");
     if build_dir.exists() {
         fs::remove_dir_all(&build_dir)
             .map_err(|err| format!("failed to remove .k1/build: {err}"))?;
     }
 
     fs::create_dir_all(&build_dir).map_err(|err| format!("failed to create .k1/build: {err}"))?;
+    fs::create_dir_all(&cache_dir).map_err(|err| format!("failed to create .k1/cache: {err}"))?;
 
     let kernel_dest = build_dir.join("kernel");
     fs::copy(&binary, &kernel_dest)
@@ -29,21 +32,23 @@ pub fn build(binary: String) -> Result<(), String> {
     let arch = detect_arch(&binary)?;
     persist_ovmf_files(&build_dir, arch)?;
 
-    let limine_dir = build_dir.join("limine");
-    let mut clone_cmd = command("git");
-    clone_cmd
-        .arg("clone")
-        .arg("--branch")
-        .arg("v10.x-binary")
-        .arg("--depth")
-        .arg("1")
-        .arg("https://github.com/limine-bootloader/limine.git")
-        .arg(&limine_dir);
-    run_command(&mut clone_cmd, "failed to clone limine")?;
+    let limine_dir = cache_dir.join("limine");
+    if !limine_dir.exists() {
+        let mut clone_cmd = command("git");
+        clone_cmd
+            .arg("clone")
+            .arg("--branch")
+            .arg("v10.x-binary")
+            .arg("--depth")
+            .arg("1")
+            .arg("https://github.com/limine-bootloader/limine.git")
+            .arg(&limine_dir);
+        run_command(&mut clone_cmd, "failed to clone limine")?;
 
-    let mut make_cmd = command("make");
-    make_cmd.arg("all").current_dir(&limine_dir);
-    run_command(&mut make_cmd, "failed to build limine")?;
+        let mut make_cmd = command("make");
+        make_cmd.arg("all").current_dir(&limine_dir);
+        run_command(&mut make_cmd, "failed to build limine")?;
+    }
 
     let iso_root = build_dir.join("iso_root");
     let iso_limine = iso_root.join("boot").join("limine");
