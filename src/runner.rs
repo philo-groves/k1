@@ -194,6 +194,18 @@ fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), Stri
         .get("test_group")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "missing test_group in debugcon JSON".to_string())?;
+    let declared_count = extract_count(&value, "test_count").unwrap_or(0);
+    let observed_count = json_lines
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("test").and_then(|name| name.as_str()).is_some())
+        .count() as u64;
+    if declared_count > observed_count {
+        return Err(format!(
+            "incomplete normalized test output for {test_group}: declared {declared_count} tests but observed {observed_count} test records"
+        ));
+    }
+
     let safe_group: String = test_group
         .chars()
         .map(|ch| {
