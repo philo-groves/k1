@@ -7,8 +7,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 static WORKER_GUARD: OnceLock<Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>> =
     OnceLock::new();
 
-pub fn init(workspace_root: &Path, testing_mode: bool) -> Result<PathBuf, String> {
-    let logs_dir = workspace_root.join(".k1").join("logs");
+pub fn init(
+    workspace_root: &Path,
+    testing_mode: bool,
+    arch: crate::builder::Arch,
+) -> Result<PathBuf, String> {
+    let logs_dir = workspace_root.join(".k1").join(arch.karch()).join("logs");
     std::fs::create_dir_all(&logs_dir)
         .map_err(|err| format!("failed to create {}: {err}", logs_dir.display()))?;
 

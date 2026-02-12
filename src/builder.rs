@@ -16,15 +16,21 @@ pub enum Arch {
 pub fn build(binary: String) -> Result<(), String> {
     info!(binary = %binary, "building kernel image");
     let workspace_root = workspace_root_from_binary(&binary)?;
+    let arch = detect_arch(&binary)?;
     let k1_dir = workspace_root.join(".k1");
-    let build_dir = k1_dir.join("build");
+    let build_dir = k1_dir.join(arch.karch()).join("build");
     let cache_dir = k1_dir.join("cache");
     if build_dir.exists() {
-        fs::remove_dir_all(&build_dir)
-            .map_err(|err| format!("failed to remove .k1/build: {err}"))?;
+        fs::remove_dir_all(&build_dir).map_err(|err| {
+            format!(
+                "failed to remove arch build dir {}: {err}",
+                build_dir.display()
+            )
+        })?;
     }
 
-    fs::create_dir_all(&build_dir).map_err(|err| format!("failed to create .k1/build: {err}"))?;
+    fs::create_dir_all(&build_dir)
+        .map_err(|err| format!("failed to create {}: {err}", build_dir.display()))?;
     fs::create_dir_all(&cache_dir).map_err(|err| format!("failed to create .k1/cache: {err}"))?;
 
     let kernel_dest = build_dir.join("kernel");
@@ -32,7 +38,6 @@ pub fn build(binary: String) -> Result<(), String> {
         .map_err(|err| format!("failed to copy kernel binary: {err}"))?;
     debug!(source = %binary, dest = %kernel_dest.display(), "copied kernel binary");
 
-    let arch = detect_arch(&binary)?;
     info!(arch = %arch.karch(), "detected architecture");
     persist_ovmf_files(&cache_dir, &build_dir, arch)?;
 

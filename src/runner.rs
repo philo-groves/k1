@@ -7,10 +7,12 @@ use tracing::{debug, info};
 
 pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
     let workspace_root = crate::builder::workspace_root_from_binary(&binary)?;
+    let arch = crate::builder::detect_arch(&binary)?;
     let testing_mode = is_testing_mode(&binary, &binary_args);
-    let log_path = crate::logging::init(&workspace_root, testing_mode)?;
+    let log_path = crate::logging::init(&workspace_root, testing_mode, arch)?;
     info!(
         binary = %binary,
+        arch = %arch.karch(),
         testing_mode,
         log_path = %log_path.display(),
         "starting runner"
@@ -18,10 +20,9 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
 
     crate::builder::build(binary.clone())?;
 
-    let arch = crate::builder::detect_arch(&binary)?;
     let image_name = crate::builder::image_name_from_binary(&binary);
     let karch = arch.karch();
-    let build_dir = workspace_root.join(".k1").join("build");
+    let build_dir = workspace_root.join(".k1").join(karch).join("build");
     let iso_path = build_dir.join(format!("{image_name}.iso"));
     let ovmf_code = build_dir.join("ovmf").join(format!("ovmf-code-{karch}.fd"));
     let ovmf_vars = build_dir.join("ovmf").join(format!("ovmf-vars-{karch}.fd"));
@@ -49,7 +50,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
                 .arg(&iso_path);
 
             if testing_mode {
-                let debugcon = debugcon_output_path(&workspace_root)?;
+                let debugcon = debugcon_output_path(&workspace_root, arch)?;
                 debugcon_path = Some(debugcon.clone());
                 qemu_cmd
                     .arg("-debugcon")
@@ -92,7 +93,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
                 .arg(&iso_path);
 
             if testing_mode {
-                let debugcon = debugcon_output_path(&workspace_root)?;
+                let debugcon = debugcon_output_path(&workspace_root, arch)?;
                 debugcon_path = Some(debugcon.clone());
                 qemu_cmd
                     .arg("-serial")
@@ -116,7 +117,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
     run_command(&mut qemu_cmd, "failed to run qemu", testing_mode, arch)?;
 
     if let Some(path) = debugcon_path {
-        finalize_debugcon_file(&path, &workspace_root)?;
+        finalize_debugcon_file(&path, &workspace_root, arch)?;
     }
 
     info!("runner completed successfully");
@@ -153,8 +154,14 @@ fn is_testing_mode(binary: &str, binary_args: &[String]) -> bool {
     })
 }
 
-fn debugcon_output_path(workspace_root: &Path) -> Result<std::path::PathBuf, String> {
-    let dir = workspace_root.join(".k1").join("testing");
+fn debugcon_output_path(
+    workspace_root: &Path,
+    arch: crate::builder::Arch,
+) -> Result<std::path::PathBuf, String> {
+    let dir = workspace_root
+        .join(".k1")
+        .join(arch.karch())
+        .join("testing");
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
 
@@ -167,7 +174,11 @@ fn debugcon_output_path(workspace_root: &Path) -> Result<std::path::PathBuf, Str
     Ok(path)
 }
 
-fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), String> {
+fn finalize_debugcon_file(
+    path: &Path,
+    workspace_root: &Path,
+    arch: crate::builder::Arch,
+) -> Result<(), String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let cleaned = strip_ansi_and_control(&raw);
@@ -216,7 +227,10 @@ fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), Stri
             }
         })
         .collect();
-    let dir = workspace_root.join(".k1").join("testing");
+    let dir = workspace_root
+        .join(".k1")
+        .join(arch.karch())
+        .join("testing");
     let dest = dir.join(format!("testing-{safe_group}.jsonl"));
 
     if dest.exists() {
@@ -235,11 +249,15 @@ fn finalize_debugcon_file(path: &Path, workspace_root: &Path) -> Result<(), Stri
     std::fs::remove_file(path)
         .map_err(|err| format!("failed to remove {}: {err}", path.display()))?;
     info!(test_group, output = %dest.display(), "persisted normalized test output");
-    process_and_log_test_results(&dir, test_group)?;
+    process_and_log_test_results(&dir, test_group, arch)?;
     Ok(())
 }
 
-fn process_and_log_test_results(testing_dir: &Path, test_group: &str) -> Result<(), String> {
+fn process_and_log_test_results(
+    testing_dir: &Path,
+    test_group: &str,
+    arch: crate::builder::Arch,
+) -> Result<(), String> {
     #[derive(Default)]
     struct Counts {
         explicit: Option<(u64, u64, u64)>,
@@ -280,6 +298,12 @@ fn process_and_log_test_results(testing_dir: &Path, test_group: &str) -> Result<
 
             let value: serde_json::Value = serde_json::from_str(trimmed)
                 .map_err(|err| format!("failed to parse normalized test output JSON: {err}"))?;
+
+            if let Some(record_arch) = value.get("arch").and_then(|arch| arch.as_str())
+                && record_arch != arch.karch()
+            {
+                continue;
+            }
 
             let crate_name = value
                 .get("crate")
@@ -335,6 +359,7 @@ fn process_and_log_test_results(testing_dir: &Path, test_group: &str) -> Result<
 
     info!(
         test_group,
+        arch = %arch.karch(),
         crates = crate_count,
         testing_dir = %testing_dir.display(),
         "printed test results summary"
