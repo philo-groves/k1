@@ -1,6 +1,6 @@
 [package]
 name = "k1"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Philo Groves <philogroves@gmail.com>"]
 description = "A cargo runner for Rust-based operating system kernels."
