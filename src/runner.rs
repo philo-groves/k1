@@ -30,6 +30,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
     let mut qemu_cmd = Command::new(format!("qemu-system-{karch}"));
 
     let mut debugcon_path: Option<PathBuf> = None;
+    let mut remove_debugcon_source = true;
 
     match arch {
         crate::builder::Arch::X86_64 => {
@@ -51,6 +52,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
 
             if testing_mode {
                 let debugcon = debugcon_output_path(&workspace_root, arch)?;
+                let serial_log = kernel_serial_log_path(&workspace_root, arch)?;
                 debugcon_path = Some(debugcon.clone());
                 qemu_cmd
                     .arg("-debugcon")
@@ -60,7 +62,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
                     .arg("-monitor")
                     .arg("none")
                     .arg("-serial")
-                    .arg("none")
+                    .arg(format!("file:{}", serial_log.display()))
                     .arg("-no-reboot")
                     .arg("-nographic");
             }
@@ -93,11 +95,12 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
                 .arg(&iso_path);
 
             if testing_mode {
-                let debugcon = debugcon_output_path(&workspace_root, arch)?;
-                debugcon_path = Some(debugcon.clone());
+                let serial_log = kernel_serial_log_path(&workspace_root, arch)?;
+                debugcon_path = Some(serial_log.clone());
+                remove_debugcon_source = false;
                 qemu_cmd
                     .arg("-serial")
-                    .arg(format!("file:{}", debugcon.display()))
+                    .arg(format!("file:{}", serial_log.display()))
                     .arg("-monitor")
                     .arg("none")
                     .arg("-no-reboot")
@@ -117,7 +120,7 @@ pub fn run(binary: String, binary_args: Vec<String>) -> Result<(), String> {
     run_command(&mut qemu_cmd, "failed to run qemu", testing_mode, arch)?;
 
     if let Some(path) = debugcon_path {
-        finalize_debugcon_file(&path, &workspace_root, arch)?;
+        finalize_debugcon_file(&path, &workspace_root, arch, remove_debugcon_source)?;
     }
 
     info!("runner completed successfully");
@@ -178,6 +181,7 @@ fn finalize_debugcon_file(
     path: &Path,
     workspace_root: &Path,
     arch: crate::builder::Arch,
+    remove_source: bool,
 ) -> Result<(), String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
@@ -246,11 +250,30 @@ fn finalize_debugcon_file(
             .map_err(|err| format!("failed to write {}: {err}", dest.display()))?;
     }
 
-    std::fs::remove_file(path)
-        .map_err(|err| format!("failed to remove {}: {err}", path.display()))?;
+    if remove_source {
+        std::fs::remove_file(path)
+            .map_err(|err| format!("failed to remove {}: {err}", path.display()))?;
+    }
     info!(test_group, output = %dest.display(), "persisted normalized test output");
     process_and_log_test_results(&dir, test_group, arch)?;
     Ok(())
+}
+
+fn kernel_serial_log_path(
+    workspace_root: &Path,
+    arch: crate::builder::Arch,
+) -> Result<std::path::PathBuf, String> {
+    let dir = workspace_root.join(".k1").join(arch.karch()).join("logs");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("failed to read system time: {err}"))?;
+    let file_name = format!("kernel-run-{}-{}.log", now.as_secs(), now.subsec_nanos());
+    let path = dir.join(file_name);
+    debug!(path = %path.display(), "created kernel serial log path");
+    Ok(path)
 }
 
 fn process_and_log_test_results(
